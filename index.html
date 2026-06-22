@@ -2,36 +2,222 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>線上連線配分器</title>
-    <!-- 引入 Firebase SDK -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
-        import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
-
-        // 1. 在 Firebase 控制台取得以下配置
-        const firebaseConfig = {
-            apiKey: "YOUR_API_KEY",
-            databaseURL: "YOUR_DATABASE_URL",
-            projectId: "YOUR_PROJECT_ID"
-        };
-
-        const app = initializeApp(firebaseConfig);
-        const db = getDatabase(app);
-
-        // 2. 監聽數據庫，實現多人同步
-        const dataRef = ref(db, 'scores/');
-        onValue(dataRef, (snapshot) => {
-            const data = snapshot.val();
-            updateUI(data); // 根據數據庫更新表格
-        });
-
-        // 3. 上傳數據
-        function saveData(studentData) {
-            set(ref(db, 'scores/'), studentData);
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel 快速匯入與動態配分星星轉換器</title>
+    <style>
+        :root { 
+            --primary: #2c3e50; 
+            --accent: #3498db; 
+            --bg: #f4f7f6; 
+            --soft-pink: #ffe6eb;
         }
-    </script>
+        body { 
+            font-family: 'Segoe UI', sans-serif; 
+            background: var(--bg); 
+            padding: 20px; 
+            color: #333; 
+            display: flex;
+            justify-content: center;
+        }
+        .container { 
+            width: 100%;
+            max-width: 800px; 
+            background: white; 
+            padding: 25px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+        }
+        h2 { 
+            border-left: 5px solid var(--accent); 
+            padding-left: 10px; 
+            color: var(--primary);
+        }
+        .controls { 
+            display: flex; 
+            gap: 20px; 
+            align-items: center; 
+            margin-bottom: 20px; 
+            background-color: var(--soft-pink);
+            padding: 15px;
+            border-radius: 8px;
+        }
+        textarea { 
+            width: 100%; 
+            height: 150px; 
+            padding: 10px; 
+            border: 1px solid #ccc; 
+            border-radius: 6px; 
+            box-sizing: border-box; 
+            font-family: monospace; 
+            font-size: 14px;
+        }
+        button { 
+            padding: 12px 24px; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            color: white; 
+            font-weight: bold; 
+            font-size: 16px;
+            transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.9; }
+        .btn-calc { background: var(--accent); }
+        .btn-copy { background: #27ae60; margin-left: 10px;}
+        
+        .table-responsive {
+            overflow-x: auto;
+            margin-top: 20px;
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+        }
+        th, td { 
+            border: 1px solid #ddd; 
+            padding: 12px; 
+            text-align: center; 
+        }
+        th { background: #f8f9fa; font-weight: bold; }
+        
+        /* 響應式調整 */
+        @media (max-width: 600px) {
+            .controls { flex-direction: column; align-items: flex-start; gap: 10px; }
+        }
+    </style>
 </head>
 <body>
-    <!-- 介面與前述邏輯相同 -->
+
+<div class="container">
+    <h2>Excel 快速匯入與動態配分轉換器</h2>
+    
+    <div class="controls">
+        <label><strong>全域基本分數：</strong><input type="number" id="baseScore" value="60" style="width: 70px; padding: 5px; border-radius: 4px; border: 1px solid #bbb;"></label>
+    </div>
+    
+    <p>請將 Excel 的<strong>「姓名」</strong>與<strong>「星星數 (0-40)」</strong>兩欄數據直接複製，貼入下方：</p>
+    <textarea id="excelInput" placeholder="範例：&#10;王小明&#09;35&#10;李小華&#09;28"></textarea>
+    
+    <div style="margin-top: 15px;">
+        <button class="btn-calc" onclick="processData()">一鍵計算分數</button>
+        <button class="btn-copy" onclick="copyTable()">複製表格結果</button>
+    </div>
+
+    <div class="table-responsive">
+        <table id="resultTable">
+            <thead>
+                <tr><th>姓名</th><th>基本分數</th><th>星星數</th><th>最終總分</th></tr>
+            </thead>
+            <tbody id="resultBody">
+                <tr><td colspan="4" style="color: #888;">尚未匯入數據，請貼上資料後點擊計算</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    /**
+     * 動態加權核心演算法
+     */
+    function processData() {
+        // 取得基本分數設定（防呆：若為空則預設 60）
+        const baseScore = parseFloat(document.getElementById('baseScore').value) || 60;
+        const input = document.getElementById('excelInput').value.trim();
+        const tbody = document.getElementById('resultBody');
+        tbody.innerHTML = '';
+
+        // 防呆機制：若 Textarea 為空則中斷
+        if (!input) {
+            alert('請先在文字區域貼入 Excel 數據！');
+            return;
+        }
+
+        // 1. 解析輸入數據 (支援 Tab 及各種空白分隔)
+        const lines = input.split('\n');
+        let students = [];
+        let maxStars = 0;
+
+        lines.forEach(line => {
+            // 過濾空行
+            if (!line.trim()) return; 
+            
+            // 使用正則表達式拆解 Tab 或 連續空白
+            const parts = line.split(/\t|\s+/); 
+            
+            if (parts.length >= 2) {
+                const name = parts[0].trim();
+                const stars = parseFloat(parts[1]);
+                
+                // 防呆：確保星星數是有效數字
+                if (!isNaN(stars)) {
+                    students.push({ name, stars });
+                    if (stars > maxStars) maxStars = stars;
+                }
+            }
+        });
+
+        // 防呆提示
+        if (students.length === 0) {
+            alert('無法解析您貼入的格式，請確認是否有包含「姓名」與「星星數」欄位，且以 Tab 或 空白 間隔！');
+            return;
+        }
+        if (maxStars === 0) {
+            alert('偵測到所有學生的星星數量皆為 0，請確認數據是否正確。');
+        }
+
+        // 2. 動態計算每顆星的分數值 (星值)
+        // 剩餘可分配分數 = 99 - 基本分數 (封頂 99 分)
+        const remainingPoints = 99 - baseScore;
+        
+        // 每顆星的分數值 = 剩餘分 / 最高星數 (若 maxStars 為 0 則避免除以零錯誤)
+        const starValue = maxStars > 0 ? (remainingPoints / maxStars) : 0;
+
+        // 3. 計算每位學生的總分並顯示
+        students.forEach(s => {
+            // 公式：最終分數 = 基本分數 + (該學生的星星數 * 每顆星的分數值)
+            let total = baseScore + (s.stars * starValue);
+            
+            // 四捨五入至整數
+            const finalScore = Math.round(total);
+            
+            // 動態生成表格行 (Row)
+            const row = `<tr>
+                <td>${s.name}</td>
+                <td>${baseScore}</td>
+                <td>${s.stars}</td>
+                <td><strong>${finalScore}</strong></td>
+            </tr>`;
+            tbody.innerHTML += row;
+        });
+    }
+
+    /**
+     * 一鍵複製表格結果至剪貼簿
+     */
+    function copyTable() {
+        const table = document.getElementById('resultTable');
+        
+        // 建立一個選取範圍
+        const range = document.createRange();
+        range.selectNode(table);
+        
+        // 清除現有選取範圍
+        window.getSelection().removeAllRanges();
+        // 選取表格
+        window.getSelection().addRange(range);
+        
+        try {
+            // 執行複製指令
+            document.execCommand('copy');
+            alert('轉換結果表格已成功複製！您可以直接貼到 Excel 貼上。');
+        } catch (err) {
+            alert('複製失敗，請手動反白滑鼠選取表格來複製。');
+        }
+        
+        // 取消選取狀態
+        window.getSelection().removeAllRanges();
+    }
+</script>
+
 </body>
 </html>
